@@ -603,6 +603,7 @@ function api(_url, options) {{
   const body = JSON.parse(options.body);
   return new Promise(resolve => pending.push(() => {{ persisted = body; resolve(body); }}));
 }}
+function _enqueueSettingsPost(options) {{ return api('/api/settings', options); }}
 function _rememberAppearanceSaved() {{}}
 function _setAppearanceAutosaveStatus() {{}}
 function renderSessionListFromCache() {{ renders += 1; }}

@@ -112,7 +112,9 @@ def test_full_save_settings_still_includes_font_size():
 def test_full_save_serializes_with_appearance_autosaves():
     queue_block = _function_block(PANELS_JS, "_queueAppearanceSettingsWrite")
     assert "_appearanceAutosaveWriteQueue.then" in queue_block
-    assert "api('/api/settings'" in queue_block
+    # The grouped-sidebar queue composes with master's shared settings queue
+    # after rebase, rather than bypassing it with a second direct API writer.
+    assert "_enqueueSettingsPost" in queue_block
 
     barrier_block = _function_block(PANELS_JS, "_writeSettingsWithAppearanceBarrier")
     compact_barrier = barrier_block.replace(" ", "")
