@@ -1177,9 +1177,9 @@ def _parse_nonnegative_int(value):
 def model_explicit_pick_signature(model, model_provider) -> str:
     """Stable signature of a (model, provider) selection for #5979 explicit-pick
     provenance. The persisted ``Session.model_explicit_pick_signature`` is set to
-    this when the user deliberately picks a model; the streaming resolver only
-    treats a selection as deliberate when the CURRENT routing context produces
-    the same signature. Any model/provider change (chat-start, session-update,
+    this when the user deliberately picks a model; runtime resolvers only treat
+    a selection as deliberate when the CURRENT routing context produces the
+    same signature. Any model/provider change (chat-start, session-update,
     normalization, provider repair) yields a different signature and thus
     invalidates the stale pick — so a #433 first-party leftover is never wrongly
     preserved. Uses \\x1f (unit separator) so it can't collide with model ids.
@@ -1187,6 +1187,21 @@ def model_explicit_pick_signature(model, model_provider) -> str:
     _m = str(model or "").strip()
     _p = str(model_provider or "").strip().lower()
     return f"{_m}\x1f{_p}"
+
+
+def session_model_was_explicitly_picked(
+    session,
+    *,
+    fallback_model=None,
+    fallback_provider=None,
+) -> bool:
+    """Return whether the session's current model still matches its picked one."""
+    picked_signature = getattr(session, 'model_explicit_pick_signature', None)
+    current_signature = model_explicit_pick_signature(
+        getattr(session, 'model', None) or fallback_model,
+        getattr(session, 'model_provider', None) or fallback_provider,
+    )
+    return bool(picked_signature) and picked_signature == current_signature
 
 
 class Session:
@@ -1261,9 +1276,9 @@ class Session:
         self.model = model
         self.model_provider = str(model_provider).strip().lower() if model_provider else None
         # #5979: signature of the model the user DELIBERATELY picked this session
-        # (``"<model>\x1f<provider>"``), or None. Used by the streaming resolver
-        # to preserve a custom-proxy vendor namespace on a COLD catalog ONLY when
-        # the current routing context still matches what was picked. Storing a
+        # (``"<model>\x1f<provider>"``), or None. Used by cold-catalog runtime
+        # resolution to preserve a deliberate selection ONLY when the current
+        # routing context still matches what was picked. Storing a
         # SIGNATURE (not a bare bool) means any later model/provider change — via
         # /api/chat/start, /api/session/update, normalization, or provider repair
         # — automatically invalidates the pick (the signatures no longer match),

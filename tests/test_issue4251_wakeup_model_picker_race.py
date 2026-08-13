@@ -10,12 +10,19 @@ import api.streaming as streaming
 
 
 class FakeSession:
-    def __init__(self, *, model, model_provider="anthropic"):
+    def __init__(
+        self,
+        *,
+        model,
+        model_provider="anthropic",
+        model_explicit_pick_signature=None,
+    ):
         self.session_id = "sess-4251"
         self.title = "Wakeup picker race"
         self.workspace = "/tmp"
         self.model = model
         self.model_provider = model_provider
+        self.model_explicit_pick_signature = model_explicit_pick_signature
         self.messages = []
         self.personality = None
         self.profile = None
@@ -98,7 +105,7 @@ class CapturingAgent:
         return None
 
 
-def _install_streaming_harness(monkeypatch, fake_session):
+def _install_streaming_harness(monkeypatch, fake_session, *, resolve_model_provider=None):
     fake_runtime_module = types.ModuleType("hermes_cli.runtime_provider")
     fake_runtime_module.resolve_runtime_provider = mock.Mock(
         return_value={
@@ -125,7 +132,8 @@ def _install_streaming_harness(monkeypatch, fake_session):
     monkeypatch.setattr(
         streaming,
         "resolve_model_provider",
-        lambda *_args, **_kwargs: ("haiku-4-5", "anthropic", None),
+        resolve_model_provider
+        or (lambda *_args, **_kwargs: ("haiku-4-5", "anthropic", None)),
     )
     monkeypatch.setattr("api.config.get_config", lambda: {})
     monkeypatch.setattr("api.config._resolve_cli_toolsets", lambda *_args, **_kwargs: [])
@@ -141,8 +149,13 @@ def _run_streaming_turn(
     stream_id,
     dispatch_model="haiku-4-5",
     dispatch_provider="anthropic",
+    resolve_model_provider=None,
 ):
-    _install_streaming_harness(monkeypatch, fake_session)
+    _install_streaming_harness(
+        monkeypatch,
+        fake_session,
+        resolve_model_provider=resolve_model_provider,
+    )
     fake_session.active_stream_id = stream_id
     fake_queue = queue.Queue()
     try:
@@ -171,6 +184,34 @@ def test_dispatch_stamp_does_not_clobber_newer_picker_model(monkeypatch):
 
     assert fake_session.model == "opus-4-8"
     assert fake_session.model_provider == "openrouter"
+
+
+def test_streaming_resolver_receives_matching_explicit_pick_provenance(monkeypatch):
+    from api.models import model_explicit_pick_signature
+
+    model = "@openai-codex:gpt-5.6-sol"
+    provider = "openai-codex"
+    fake_session = FakeSession(
+        model=model,
+        model_provider=provider,
+        model_explicit_pick_signature=model_explicit_pick_signature(model, provider),
+    )
+    captured = {}
+
+    def _resolve_model_provider(model_with_provider_context, *, explicitly_picked=False):
+        captured["explicitly_picked"] = explicitly_picked
+        return model_with_provider_context, provider, None
+
+    _run_streaming_turn(
+        monkeypatch,
+        fake_session,
+        stream_id="stream-4251-explicit-pick",
+        dispatch_model=model,
+        dispatch_provider=provider,
+        resolve_model_provider=_resolve_model_provider,
+    )
+
+    assert captured["explicitly_picked"] is True
 
 
 def test_dispatch_stamp_does_not_clobber_newer_picker_provider_only_choice(monkeypatch):

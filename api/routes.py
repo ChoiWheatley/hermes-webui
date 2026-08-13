@@ -9654,6 +9654,7 @@ from api.models import (
     process_wakeup_pause_matches,
     process_wakeup_credential_state_fingerprint,
     process_wakeup_pause_credential_state_changed,
+    session_model_was_explicitly_picked,
     suppress_process_wakeup_for_provider_pause,
 )
 
@@ -21968,6 +21969,7 @@ def start_session_turn(
         profile_provider=_pp_provider,
         profile_default_model=_pp_default,
         profile_config=_pp_cfg,
+        explicit_model_pick=session_model_was_explicitly_picked(s),
         prefer_cached_catalog=True,
     )
     _paused_wakeup_response = None

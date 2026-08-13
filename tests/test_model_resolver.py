@@ -1633,43 +1633,39 @@ def test_explicit_pick_signature_persists_round_trip_5979():
     assert s3.model_explicit_pick_signature is None
 
 
-def test_streaming_explicitly_picked_computation_5979():
-    """End-to-end lifecycle (Fable fast-follow): reproduce the exact
-    signature-comparison the streaming worker does at api/streaming.py, proving
-    the persisted signature drives explicitly_picked correctly across the
-    deliberate-pick, stale-after-update, and never-picked cases.
-
-    Mirrors streaming.py:
-        _picked_sig = s.model_explicit_pick_signature
-        _current_sig = mk_sig(s.model or model, s.model_provider or provider_context)
-        _explicitly_picked = bool(_picked_sig) and _picked_sig == _current_sig
-    """
+def test_session_model_was_explicitly_picked_5979():
+    """The shared predicate accepts matching provenance and rejects stale picks."""
     import api.models as models
     mk = models.model_explicit_pick_signature
-
-    def _explicitly_picked(session):
-        picked = getattr(session, 'model_explicit_pick_signature', None)
-        cur = mk(getattr(session, 'model', None), getattr(session, 'model_provider', None))
-        return bool(picked) and picked == cur
+    explicitly_picked = models.session_model_was_explicitly_picked
 
     # 1) deliberate pick, unchanged context → honored
     s = models.Session(session_id='e2e1', model='x-ai/grok-composer-2.5-fast',
                         model_provider='custom:llm-proxy')
     s.model_explicit_pick_signature = mk('x-ai/grok-composer-2.5-fast', 'custom:llm-proxy')
-    assert _explicitly_picked(s) is True
+    assert explicitly_picked(s) is True
 
     # 2) session/update switches the model WITHOUT restamping → stale pick ignored
     s.model = 'openai/gpt-5.4'  # e.g. user switched; signature now stale
-    assert _explicitly_picked(s) is False
+    assert explicitly_picked(s) is False
 
     # 3) provider switch without restamp → stale pick ignored
     s2 = models.Session(session_id='e2e2', model='x-ai/grok-composer-2.5-fast',
                         model_provider='custom:llm-proxy')
     s2.model_explicit_pick_signature = mk('x-ai/grok-composer-2.5-fast', 'custom:llm-proxy')
     s2.model_provider = 'openai'
-    assert _explicitly_picked(s2) is False
+    assert explicitly_picked(s2) is False
 
     # 4) never picked → unmarked
     s3 = models.Session(session_id='e2e3', model='x-ai/grok-composer-2.5-fast',
                         model_provider='custom:llm-proxy')
-    assert _explicitly_picked(s3) is False
+    assert explicitly_picked(s3) is False
+
+    # 5) a worker may supply routing context before the Session fields are set
+    s4 = models.Session(session_id='e2e4', model=None, model_provider=None)
+    s4.model_explicit_pick_signature = mk('fallback-model', 'custom:proxy')
+    assert explicitly_picked(
+        s4,
+        fallback_model='fallback-model',
+        fallback_provider='custom:proxy',
+    ) is True

@@ -9251,18 +9251,18 @@ def _run_agent_streaming(
             # pick — so a #433 first-party leftover is never wrongly preserved on
             # a cold catalog. Only affects the cold custom-proxy branch; warm
             # endpoint-advertised provenance always wins over this flag.
-            from api.models import model_explicit_pick_signature as _mk_sig
-            _picked_sig = getattr(s, "model_explicit_pick_signature", None)
+            from api.models import session_model_was_explicitly_picked
             # Compare against the session's persisted model+provider — the exact
             # fields /api/chat/start stamped the signature from (it persists the
             # resolved model+provider onto the session before dispatch). Falls
             # back to the worker's model/provider_context if the session fields
             # are unset. A mismatch (any later model/provider change) yields a
             # different signature → treated as NOT a deliberate pick.
-            _sig_model = getattr(s, "model", None) or model
-            _sig_provider = getattr(s, "model_provider", None) or provider_context
-            _current_sig = _mk_sig(_sig_model, _sig_provider)
-            _explicitly_picked = bool(_picked_sig) and _picked_sig == _current_sig
+            _explicitly_picked = session_model_was_explicitly_picked(
+                s,
+                fallback_model=model,
+                fallback_provider=provider_context,
+            )
             with profiles_api.profile_scope_for_detached_worker(
                 _resolved_profile_name, "model resolution", logger_override=logger
             ):

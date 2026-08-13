@@ -13,7 +13,7 @@ browser) reached chat/start with a COLD provider catalog and triggered a
 LIVE per-provider rebuild whose Copilot token-exchange HTTPS call hung the
 wakeup turn forever on this WSL/corp network — NOT a race.
 
-Two fixes, two tests:
+Coverage:
 
 1. test_wakeup_turn_uses_persisted_model_no_live_probe
    start_session_turn(source="process_wakeup") resolves the model from the
@@ -25,12 +25,19 @@ Two fixes, two tests:
    Defense-in-depth: an unbounded/hanging provider probe cannot stall a
    foreground get_available_models() past the wall-clock budget — it falls
    back to a usable model list and lets the rebuild finish out-of-band.
+
+3. test_process_wakeup_respects_explicit_pick_signature_with_cold_catalog
+   Cache-only wakeups preserve a matching durable user pick, while stale or
+   missing signatures still normalize through the existing fallback path.
 """
 
 from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -108,6 +115,129 @@ def test_wakeup_turn_uses_persisted_model_no_live_probe(monkeypatch):
     assert elapsed < 5.0, (
         f"wakeup turn took {elapsed:.2f}s — a live provider probe likely ran"
     )
+
+
+@pytest.mark.parametrize(
+    (
+        "signature_model",
+        "signature_provider",
+        "expected_model",
+        "expected_provider",
+    ),
+    (
+        pytest.param(
+            "@openai-codex:gpt-5.6-sol",
+            "openai-codex",
+            "@openai-codex:gpt-5.6-sol",
+            "openai-codex",
+            id="matching-signature",
+        ),
+        pytest.param(
+            "@anthropic:claude-sonnet-4",
+            "anthropic",
+            "deepseek/deepseek-v4-flash-0731",
+            None,
+            id="stale-signature",
+        ),
+        pytest.param(
+            None,
+            None,
+            "deepseek/deepseek-v4-flash-0731",
+            None,
+            id="missing-signature",
+        ),
+    ),
+)
+def test_process_wakeup_respects_explicit_pick_signature_with_cold_catalog(
+    monkeypatch,
+    signature_model,
+    signature_provider,
+    expected_model,
+    expected_provider,
+):
+    """A wakeup honors only a persisted pick matching current routing state.
+
+    The cache-only catalog can legitimately omit the selected provider after a
+    restart.  A matching signature proves the stored model/provider pair was a
+    deliberate user choice, so the wakeup must not normalize it to the profile
+    default.  A stale signature remains subject to the existing normalization.
+    """
+    from api.models import Session, model_explicit_pick_signature
+    import api.routes as routes
+
+    sid = "sess-wakeup-explicit-codex"
+    selected_model = "@openai-codex:gpt-5.6-sol"
+    selected_provider = "openai-codex"
+    default_model = "deepseek/deepseek-v4-flash-0731"
+    selected_signature = (
+        model_explicit_pick_signature(signature_model, signature_provider)
+        if signature_model is not None
+        else None
+    )
+    captured: list = []
+    catalog_calls: list[bool] = []
+    session = Session(
+        session_id=sid,
+        profile="default",
+        workspace=str(routes.DEFAULT_WORKSPACE),
+        model=selected_model,
+        model_provider=selected_provider,
+        model_explicit_pick_signature=selected_signature,
+    )
+
+    def _cold_catalog(*, prefer_cache=False):
+        catalog_calls.append(prefer_cache)
+        return {
+            "active_provider": "openrouter",
+            "default_model": default_model,
+            "configured_model_badges": {},
+            "groups": [],
+        }
+
+    monkeypatch.setattr(
+        routes,
+        "get_available_models",
+        _cold_catalog,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        routes,
+        "get_session",
+        lambda _sid: session,
+        raising=True,
+    )
+
+    def _start_run(request):
+        captured.append(request)
+        return {
+            "run_id": "run-wakeup-explicit-codex",
+            "stream_id": "stream-wakeup-explicit-codex",
+            "session_id": request.session_id,
+            "status": "running",
+        }
+
+    monkeypatch.setenv("HERMES_WEBUI_RUNTIME_ADAPTER", "runner-local")
+    monkeypatch.setattr(
+        routes,
+        "_runtime_runner_client_factory",
+        lambda: SimpleNamespace(start_run=_start_run),
+        raising=True,
+    )
+
+    response = routes.start_session_turn(
+        sid,
+        "[IMPORTANT: Async delegation completed]",
+        source="process_wakeup",
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert response["stream_id"] == "stream-wakeup-explicit-codex"
+    assert catalog_calls == [True]
+    assert request.model == expected_model
+    assert request.provider == expected_provider
+    assert request.source == "process_wakeup"
+    assert request.metadata == {"route": "start_session_turn"}
 
 
 def test_wakeup_resolve_passes_prefer_cached_catalog(monkeypatch):
